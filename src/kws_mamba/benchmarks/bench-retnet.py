@@ -3,8 +3,7 @@
 """
 RetNet KWS Inference Benchmark (Parallel + Recurrent)
 
-Runs both parallel and recurrent paths for a RetNet KWS model size,
-mirroring your original architecture and benchmarking approach.
+Runs both parallel and recurrent paths for a RetNet KWS model size.
 """
 from __future__ import annotations
 
@@ -256,7 +255,7 @@ class RetNetKWS(nn.Module):
         else:
             raise ValueError(f"Unknown mode: {mode}")
 
-# ---------- Model configs (update paths to your checkpoints if needed) ----------
+# ---------- Model configs ----------
 MODEL_CONFIGS = {
     'medium':  {'model_path': '/content/drive/MyDrive/kws_models/best_kws_retnet-small.pt',
                 'd_model': 128, 'n_layers': 6, 'n_heads': 8, 'expected_classes': 36},
