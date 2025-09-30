@@ -33,12 +33,6 @@ Our MambaKWS model combines:
 # Clone the repository
 git clone https://github.com/Zig302/KWS-Mamba-Project.git
 cd KWS-Mamba-Project
-
-# Install in development mode
-pip install -e .
-
-# Or install with optional dependencies
-pip install -e ".[dev,retnet]"
 ```
 
 ### Basic Usage
@@ -50,8 +44,8 @@ from kws_mamba import mamba_mel_medium, SpeechCommands, WaveToSpec
 # Initialize model
 model = mamba_mel_medium(n_classes=35)
 
-# Load and preprocess data
-frontend = WaveToSpec(n_mels=40, n_fft=512, hop_length=160)
+# Load and preprocess data (example)
+frontend = WaveToSpec(n_mels=128, n_fft=2048, hop_length=256)
 dataset = SpeechCommands(data, None, frontend)
 
 # Training loop
@@ -62,7 +56,7 @@ for batch in dataloader:
     # ... training code
 ```
 
-### Model Variants
+### Model Variants (Mamba-Mel)
 
 | Model | Parameters | d_model | n_layers | Accuracy |
 |-------|------------|---------|----------|----------|
@@ -79,16 +73,6 @@ This project uses the Google Speech Commands V2-35 dataset:
 - ~105K training samples
 
 ## Benchmarks
-
-### Inference Performance
-
-| Device | Model | Latency (ms) | Throughput (samples/s) |
-|--------|-------|--------------|------------------------|
-| CPU (i5) | Small | 7.5 | 850 |
-| CPU (i5) | Medium | 11.0 | 620 |
-| GPU (T4) | Small | 0.8 | 3700 |
-| GPU (T4) | Medium | 1.2 | 2400 |
-| Raspberry Pi 5 | Small | 17.0 | 58 |
 
 ### Memory Usage
 
@@ -137,21 +121,10 @@ python -m kws_mamba.benchmark --model-path checkpoints/best_model.pt
 | RetNet-KWS | 1.6M | 97.2% | Alternative O(L) model |
 | **Mamba-S** | **404K** | **97.42%** | **Our approach** |
 | **Mamba-M** | **1.34M** | **97.59%** | **Our approach** |
+| **Mamba-L** | **3.17M** | **97.75%** | **Our approach** |
 
 ## Documentation
 
-- [Model Architecture](docs/architecture.md)
-- [Training Guide](docs/training.md)
-- [Benchmarking](docs/benchmarking.md)
-- [API Reference](docs/api.md)
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
 
 ## Citation
 
@@ -161,7 +134,7 @@ If you use this work in your research, please cite:
 @misc{makarov2024mamba,
   title={Mamba-based Network Design for Keyword Spotting},
   author={Makarov, Alex and Levi, Ran},
-  year={2024},
+  year={2025},
   institution={Bar-Ilan University}
 }
 ```
