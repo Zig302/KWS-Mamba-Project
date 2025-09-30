@@ -105,9 +105,6 @@ All models demonstrate linear memory scaling O(L) with sequence length, making t
 │   ├── data/               # Dataset and preprocessing
 │   │   ├── audio.py        # WaveToSpec, Augment, collate_fn
 │   │   └── dataset.py      # SpeechCommands wrapper
-│   ├── utils/              # Training and benchmarking utilities
-│   │   ├── metrics.py      # Accuracy, F1, confusion matrix
-│   │   └── seed.py         # Reproducibility and AMP helpers
 │   ├── benchmarks/         # Benchmark scripts for models
 │   └── train.py            # Main training script
 ├── notebooks/              # Jupyter notebooks with experiments and results

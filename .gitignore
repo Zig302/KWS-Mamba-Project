@@ -163,3 +163,5 @@ secrets.json
 # Compiled documentation
 docs/_build/
 docs/build/
+# Windows Zone.Identifier files
+*:Zone.Identifier
