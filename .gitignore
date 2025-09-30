@@ -112,8 +112,8 @@ cython_debug/
 *.hdf5
 *.pkl
 *.pickle
-models/
-checkpoints/
+/models/
+/checkpoints/
 wandb/
 tensorboard_logs/
 *.pt
@@ -121,8 +121,8 @@ tensorboard_logs/
 *.ckpt
 
 # Datasets
-data/
-datasets/
+/data/
+/datasets/
 *.csv
 *.json
 *.npy
