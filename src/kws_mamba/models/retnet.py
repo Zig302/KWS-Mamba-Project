@@ -93,7 +93,7 @@ class RetNetKWS(nn.Module):
     ):
         super().__init__()
 
-        # Convolutional embedding (shared with your Mamba models)
+        # Convolutional embedding (shared with Mamba models)
         self.conv_embed = nn.Sequential(
             nn.Conv2d(in_ch, 32, 3, padding=1),
             nn.BatchNorm2d(32),

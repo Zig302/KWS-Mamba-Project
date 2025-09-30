@@ -1,6 +1,6 @@
 # src/kws_mamba/models/cnn.py
 """
-CNN models for KWS (as in your original code).
+CNN models for KWS (as in the original code).
 
 Includes:
 - KeywordCNN: small CNN baseline with time-preserving pooling
@@ -51,11 +51,11 @@ class KeywordCNN(nn.Module):
 
 def build_mobilenet_v2(num_classes: int, alpha: float = 0.75, pretrained: bool = False) -> nn.Module:
     """
-    MobileNetV2 baseline adapted for single-channel inputs and your classifier head.
+    MobileNetV2 baseline adapted for single-channel inputs and classifier head.
 
     Args:
         num_classes: number of output classes (e.g., 35 or 36)
-        alpha: width multiplier (e.g., 0.75 like your notebook)
+        alpha: width multiplier
         pretrained: if True, load torchvision's default MobileNetV2 weights
     """
     import torchvision.models as tvm
@@ -76,7 +76,7 @@ def build_mobilenet_v2(num_classes: int, alpha: float = 0.75, pretrained: bool =
         bias=False,
     )
 
-    # Replace classifier with your simple dropout + linear
+    # Replace classifier with simple dropout + linear
     in_feats = net.classifier[-1].in_features
     net.classifier = nn.Sequential(
         nn.Dropout(0.2),

@@ -17,7 +17,7 @@ class MambaMelKWS(nn.Module):
         x: [B, T, F]  (time-major features; use collate_seq)
         lengths: Optional[B] original T lengths (for mask-aware pooling)
 
-    Architecture (matches your notebooks):
+    Architecture
       Conv2d front-end → Linear projection to d_model →
       [Mamba block * n_layers] with pre-norm + residual + dropout →
       LayerNorm → mask-aware mean pooling over time → classifier.

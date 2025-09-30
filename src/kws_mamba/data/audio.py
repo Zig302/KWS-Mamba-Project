@@ -89,7 +89,7 @@ class WaveToSpec:
         top_db: dynamic range for AmplitudeToDB (Mel only)
         apply_mask: enable SpecAugment masks
         freq_mask_param, time_mask_param: mask extents
-        mask_on_mfcc: also apply masks on MFCC features (common in your MFCC runs)
+        mask_on_mfcc: also apply masks on MFCC features
     """
 
     def __init__(
@@ -155,7 +155,7 @@ class WaveToSpec:
                 feats = self.freq_mask(feats)
                 feats = self.time_mask(feats)
         else:
-            # MFCC: optionally apply masks too (some of your runs do this)
+            # MFCC: optionally apply masks too
             if self.apply_mask and self.freq_mask is not None:
                 feats = self.freq_mask(feats)
                 feats = self.freq_mask(feats)

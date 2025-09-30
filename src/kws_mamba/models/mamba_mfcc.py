@@ -31,8 +31,8 @@ class MambaKWS(nn.Module):
     Args:
         num_classes: number of output classes.
         d_model: width of the Mamba blocks.
-        d_state: Mamba state size (kept constant at 16 in your notebooks).
-        expand: Mamba expansion factor (kept at 2 in your notebooks).
+        d_state: Mamba state size 
+        expand: Mamba expansion factor 
         n_layers: number of stacked Mamba blocks.
         feature_dim: input feature dimension (40 for MFCC).
         p_drop: dropout used in the projection block.
@@ -109,7 +109,7 @@ class MambaKWS(nn.Module):
         return self.classifier(pooled)  # [B, num_classes]
 
 
-# ---- Factory helpers mirroring your three MFCC variants ----
+# ---- Factory helpers mirroring three MFCC variants ----
 
 def build_small(num_classes: int) -> MambaKWS:
     """
