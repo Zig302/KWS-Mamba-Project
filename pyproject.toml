@@ -3,7 +3,7 @@ requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mamba-kws"
+name = "kws-mamba"
 dynamic = ["version"]
 description = "Mamba-based Keyword Spotting with Linear Time Complexity"
 readme = "README.md"
@@ -67,7 +67,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools_scm]
-write_to = "src/mamba_kws/_version.py"
+write_to = "src/kws_mamba/_version.py"
 
 [tool.black]
 line-length = 88
@@ -97,4 +97,4 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "--cov=mamba_kws --cov-report=term-missing --cov-report=html"
+addopts = "--cov=kws_mamba --cov-report=term-missing --cov-report=html"
