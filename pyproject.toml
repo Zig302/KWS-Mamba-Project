@@ -1,0 +1,100 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mamba-kws"
+dynamic = ["version"]
+description = "Mamba-based Keyword Spotting with Linear Time Complexity"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Alex Makarov", email = "alex.makarov@example.com"},
+    {name = "Ran Levi", email = "ran.levi@example.com"}
+]
+keywords = ["mamba", "keyword-spotting", "speech-recognition", "deep-learning", "pytorch"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+dependencies = [
+    "torch>=2.0.0",
+    "torchaudio>=2.0.0",
+    "torchvision>=0.15.0",
+    "mamba-ssm>=2.0.0",
+    "causal-conv1d>=1.0.0",
+    "datasets>=2.16.0",
+    "scikit-learn>=1.0.0",
+    "tqdm>=4.60.0",
+    "tensorboard>=2.10.0",
+    "numpy>=1.21.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "pytest-cov>=3.0",
+    "black>=22.0",
+    "isort>=5.0",
+    "flake8>=4.0",
+    "mypy>=0.950",
+]
+retnet = [
+    "yet-another-retnet>=0.5.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Zig302/KWS-Mamba-Project"
+Repository = "https://github.com/Zig302/KWS-Mamba-Project"
+Documentation = "https://github.com/Zig302/KWS-Mamba-Project#readme"
+"Bug Tracker" = "https://github.com/Zig302/KWS-Mamba-Project/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools_scm]
+write_to = "src/mamba_kws/_version.py"
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 88
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--cov=mamba_kws --cov-report=term-missing --cov-report=html"
