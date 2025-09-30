@@ -156,7 +156,7 @@ The documentation includes:
 If you use this work in your research, please cite:
 
 ```bibtex
-@misc{makarov2024mamba,
+@misc{makarov_levi_2025mamba,
   title={Mamba-based Network Design for Keyword Spotting},
   author={Makarov, Alex and Levi, Ran},
   year={2025},
