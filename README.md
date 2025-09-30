@@ -33,27 +33,42 @@ Our MambaKWS model combines:
 # Clone the repository
 git clone https://github.com/Zig302/KWS-Mamba-Project.git
 cd KWS-Mamba-Project
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Note: For Mamba models, you may need to install mamba-ssm separately
+pip install mamba-ssm
 ```
 
 ### Basic Usage
 
 ```python
 import torch
-from kws_mamba import mamba_mel_medium, SpeechCommands, WaveToSpec
+from src.kws_mamba.models.mamba_mel import mamba_mel_medium
+from src.kws_mamba.data.audio import WaveToSpec
+from src.kws_mamba.data.dataset import SpeechCommands
 
 # Initialize model
 model = mamba_mel_medium(n_classes=35)
 
-# Load and preprocess data (example)
-frontend = WaveToSpec(n_mels=128, n_fft=2048, hop_length=256)
-dataset = SpeechCommands(data, None, frontend)
+# Create audio preprocessing pipeline
+frontend = WaveToSpec(
+    feature_type="mel",
+    n_mels=128,
+    n_fft=2048,
+    hop_length=256,
+    apply_mask=True  # SpecAugment for training
+)
 
-# Training loop
-for batch in dataloader:
-    inputs, targets, lengths = batch
-    outputs = model(inputs, lengths)
-    loss = criterion(outputs, targets)
-    # ... training code
+# Load dataset (requires downloading Speech Commands V2)
+dataset = SpeechCommands(
+    raw_data=data,
+    transform=None,  # waveform-level augmentation (optional)
+    frontend=frontend
+)
+
+# For complete training examples, see notebooks/
 ```
 
 ### Model Variants (Mamba-Mel)
@@ -90,28 +105,28 @@ All models demonstrate linear memory scaling O(L) with sequence length, making t
 │   ├── data/               # Dataset and preprocessing
 │   │   ├── audio.py        # WaveToSpec, Augment, collate_fn
 │   │   └── dataset.py      # SpeechCommands wrapper
-│   └── utils/              # Training and benchmarking utilities
-│       ├── metrics.py      # Accuracy, F1, confusion matrix
-│       └── seed.py         # Reproducibility and AMP helpers
-├── notebooks/              # Jupyter notebooks and experiments
-├── assets/                 # Figures, diagrams, results
-├── configs/                # Configuration files
-├── scripts/                # Training and evaluation scripts
-└── tests/                  # Unit tests
+│   ├── utils/              # Training and benchmarking utilities
+│   │   ├── metrics.py      # Accuracy, F1, confusion matrix
+│   │   └── seed.py         # Reproducibility and AMP helpers
+│   ├── benchmarks/         # Benchmark scripts for models
+│   └── train.py            # Main training script
+├── notebooks/              # Jupyter notebooks with experiments and results
+├── documentation/          # Project documentation and research book
+├── assets/                 # Figures, diagrams, and benchmark results
+├── configs/                # Configuration files (YAML)
+└── requirements.txt        # Python dependencies
 ```
 
 ## Training
 
-```bash
-# Train with default configuration
-python -m kws_mamba.train
+See the training notebooks in the `notebooks/` directory for complete training examples:
 
-# Train with custom config
-python -m kws_mamba.train --config configs/mamba_medium.yaml
+- **Mamba Models**: `Mel_KWS_Mamba_NoAux_Small.ipynb`, `Mel_KWS_Mamba_NoAux_Medium.ipynb`, `Mel_KWS_Mamba_NoAux_Large.ipynb`
+- **MFCC Variants**: `testing_sModel_MFCC.ipynb`, `testing_mModel_MFCC.ipynb`, `testing_LModel_MFCC.ipynb`
+- **Baselines**: `KWS_CNN.ipynb`, `KWS_RetNet.ipynb`
+- **Benchmarking**: `BenchmarkGPU_Mamba.ipynb`, `Ret_Net_BenchmarkGPU.ipynb`
 
-# Benchmark trained model
-python -m kws_mamba.benchmark --model-path checkpoints/best_model.pt
-```
+All notebooks include complete training loops, evaluation metrics, and visualization of results.
 
 ## Comparison with Baselines
 
@@ -125,6 +140,16 @@ python -m kws_mamba.benchmark --model-path checkpoints/best_model.pt
 
 ## Documentation
 
+For a comprehensive understanding of the project, including theoretical background, architecture details, and experimental results, please refer to the complete project book:
+
+📖 **[Project Full Book.pdf](documentation/Project%20Full%20Book.pdf)**
+
+The documentation includes:
+- Detailed architecture descriptions and design decisions
+- Comprehensive benchmark results and analysis
+- Comparison with state-of-the-art KWS models
+- Implementation details and optimization techniques
+- Complete experimental methodology
 
 ## Citation
 
