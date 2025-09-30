@@ -12,8 +12,8 @@ from torch.utils.data import DataLoader
 from datasets import load_dataset
 from tqdm import tqdm
 
-from kws_mamba.audio import Augment, WaveToSpec
-from kws_mamba.dataset import SpeechCommands, collate_fn, compute_dataset_stats
+from kws_mamba.data.audio import Augment, WaveToSpec, collate_seq
+from kws_mamba.data.dataset import SpeechCommands, compute_dataset_stats
 from kws_mamba.models.mamba_mel import build_medium as build_mamba_mel_medium
 from kws_mamba.models.mamba_mel import build_small as build_mamba_mel_small, build_large as build_mamba_mel_large
 from kws_mamba.models.mamba_mfcc import build_small as build_mamba_mfcc_small, build_medium as build_mamba_mfcc_medium, build_large as build_mamba_mfcc_large
@@ -107,7 +107,7 @@ def main():
         num_workers=args.num_workers,
         pin_memory=True,
         persistent_workers=True,
-        collate_fn=collate_fn
+        collate_fn=collate_seq
     )
     train_dl = DataLoader(train_ds, shuffle=True, **dl_kwargs)
     val_dl   = DataLoader(val_ds, shuffle=False, **dl_kwargs)
