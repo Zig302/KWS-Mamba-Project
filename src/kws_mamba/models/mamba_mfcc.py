@@ -1,179 +1,130 @@
-"""
-Mamba-based KWS model with MFCC input
+# src/kws_mamba/models/mamba_mfcc.py
 
-Implements Mamba architecture specifically designed for MFCC features
-as an alternative to Mel spectrograms.
-"""
+from __future__ import annotations
+from typing import Optional
 
 import torch
 import torch.nn as nn
-from typing import Optional
 
-# TODO: Import actual Mamba layer when mamba-ssm is available
-# from mamba_ssm import Mamba
+from mamba_ssm import Mamba
 
 
-class MambaMFCCKWS(nn.Module):
+__all__ = [
+    "MambaKWS",          # class exactly as in the original MFCC notebooks
+    "build_small",
+    "build_medium",
+    "build_large",
+]
+
+
+class MambaKWS(nn.Module):
     """
-    Mamba-based Keyword Spotting with MFCC Input
-    
-    Simplified architecture that directly processes MFCC features with
-    linear projection followed by Mamba blocks. This approach uses the
-    DCT-decorrelated MFCC coefficients which partially substitute for
-    early local feature mixing.
-    
+    Keyword Spotting with MFCC front-end -> Linear(40 -> d_model) -> Mamba x n_layers -> Classifier.
+
+    Stays faithful to the original Colab MFCC implementations:
+      - 40-dim MFCC features are projected to d_model via Linear + LayerNorm + SiLU + Dropout.
+      - Stack of n_layers blocks, each: LayerNorm -> Mamba(d_model, d_state, expand) -> Dropout,
+        with residual connections and the same per-layer dropout schedule.
+      - Pre-classifier LayerNorm, then a 2-layer MLP head.
+      - Mask-aware mean pooling over time using the original (non-downsampled) lengths.
+
     Args:
-        n_classes (int): Number of output classes
-        d_model (int): Model dimension for Mamba blocks
-        n_layers (int): Number of Mamba layers
-        d_state (int): State dimension for SSM
-        expand (int): Expansion factor for Mamba blocks
-        n_mfcc (int): Number of MFCC coefficients (typically 13 or 40)
+        num_classes: number of output classes.
+        d_model: width of the Mamba blocks.
+        d_state: Mamba state size (kept constant at 16 in your notebooks).
+        expand: Mamba expansion factor (kept at 2 in your notebooks).
+        n_layers: number of stacked Mamba blocks.
+        feature_dim: input feature dimension (40 for MFCC).
+        p_drop: dropout used in the projection block.
     """
-    
     def __init__(
         self,
-        n_classes: int,
-        d_model: int = 128,
-        n_layers: int = 10,
+        num_classes: int,
+        d_model: int = 256,
         d_state: int = 16,
         expand: int = 2,
-        n_mfcc: int = 40,
-    ):
+        n_layers: int = 8,
+        feature_dim: int = 40,
+        p_drop: float = 0.1,
+    ) -> None:
         super().__init__()
-        
-        self.d_model = d_model
-        self.n_layers = n_layers
-        self.n_mfcc = n_mfcc
-        
-        # Direct linear projection from MFCC to model dimension
-        # No CNN needed since MFCC is already decorrelated via DCT
+
+        # Linear(40 -> d_model) + LN + SiLU + Dropout
         self.proj = nn.Sequential(
-            nn.Linear(n_mfcc, d_model),
+            nn.Linear(feature_dim, d_model),
             nn.LayerNorm(d_model),
-            nn.Dropout(0.1)
+            nn.SiLU(),
+            nn.Dropout(p_drop),
         )
-        
-        # Mamba blocks with residual connections
-        self.blocks = nn.ModuleList()
-        for _ in range(n_layers):
-            self.blocks.append(nn.Sequential(
-                nn.LayerNorm(d_model),
-                # TODO: Replace with actual Mamba layer
-                # Mamba(d_model=d_model, d_state=d_state, expand=expand),
-                nn.Linear(d_model, d_model),  # Placeholder
-                nn.Dropout(0.1)
-            ))
-        
-        # Classification head
-        self.classifier = nn.Linear(d_model, n_classes)
-        
-    def forward(
-        self, 
-        x: torch.Tensor, 
-        lengths: Optional[torch.Tensor] = None
-    ) -> torch.Tensor:
+
+        # Stack of Mamba blocks with per-layer dropout schedule: max(0.02, 0.05 - 0.005*i)
+        self.blocks = nn.ModuleList([
+            nn.ModuleDict({
+                "norm": nn.LayerNorm(d_model),
+                "mamba": Mamba(d_model=d_model, d_state=d_state, expand=expand),
+                "dropout": nn.Dropout(max(0.02, 0.05 - (i * 0.005))),
+            }) for i in range(n_layers)
+        ])
+
+        self.pre_classifier_norm = nn.LayerNorm(d_model)
+
+        # Classifier head: Dropout -> Linear(d_model -> d_model//2) -> SiLU -> Dropout -> Linear(... -> num_classes)
+        self.classifier = nn.Sequential(
+            nn.Dropout(0.1),
+            nn.Linear(d_model, d_model // 2),
+            nn.SiLU(),
+            nn.Dropout(0.05),
+            nn.Linear(d_model // 2, num_classes),
+        )
+
+    def forward(self, x: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
-        Forward pass
-        
-        Args:
-            x: Input MFCC features (B, T, n_mfcc)
-            lengths: Optional sequence lengths for masked pooling
-            
-        Returns:
-            logits: Output logits (B, n_classes)
+        x: [B, T, F]  (F = feature_dim, i.e., 40 for MFCC)
+        lengths: optional [B] tensor with valid sequence lengths (no time downsampling here).
         """
-        B, T, _ = x.shape
-        
-        # Project MFCC to model dimension
-        x = self.proj(x)  # (B, T, d_model)
-        
-        # Process through Mamba blocks with residual connections
-        for block in self.blocks:
+        # Project MFCC frames into model width
+        x = self.proj(x)  # [B, T, d_model]
+
+        # Mamba blocks with residuals
+        for blk in self.blocks:
             residual = x
-            x = block(x)
-            x = x + residual  # Residual connection
-        
-        # Masked mean pooling
+            x = blk["norm"](x)
+            x = blk["mamba"](x)
+            x = blk["dropout"](x)
+            x = residual + x
+
+        x = self.pre_classifier_norm(x)
+
+        # Mask-aware mean pooling over time (no time downsampling)
         if lengths is not None:
-            # Create mask for variable lengths
-            mask = torch.arange(T, device=x.device)[None, :] < lengths[:, None]
-            mask = mask.unsqueeze(-1)  # (B, T, 1)
-            
-            # Apply mask and compute mean
-            x_masked = x * mask
-            x_sum = x_masked.sum(dim=1)  # (B, d_model)
-            lengths_expanded = lengths.unsqueeze(-1).float()  # (B, 1)
-            pooled = x_sum / (lengths_expanded + 1e-6)
+            Tprime = x.size(1)
+            mask = (torch.arange(Tprime, device=x.device)[None, :] < lengths[:, None]).float()  # [B, T]
+            x_sum = (x * mask.unsqueeze(-1)).sum(dim=1)                                         # [B, d_model]
+            denom = mask.sum(dim=1).clamp(min=1.0).unsqueeze(-1)                                # [B, 1]
+            pooled = x_sum / denom
         else:
-            # Simple mean pooling if no lengths provided
             pooled = x.mean(dim=1)
-        
-        # Classification
-        logits = self.classifier(pooled)
-        
-        return logits
+
+        # Logits
+        return self.classifier(pooled)  # [B, num_classes]
 
 
-# Model factories for different sizes
-def mamba_mfcc_small(n_classes: int = 35, n_mfcc: int = 40) -> MambaMFCCKWS:
-    """
-    Small Mamba-MFCC model
-    
-    Args:
-        n_classes: Number of output classes
-        n_mfcc: Number of MFCC coefficients
-        
-    Returns:
-        MambaMFCCKWS model instance
-    """
-    return MambaMFCCKWS(
-        n_classes=n_classes,
-        d_model=64,
-        n_layers=8,
-        d_state=16,
-        expand=2,
-        n_mfcc=n_mfcc
-    )
+# ---- Factory helpers mirroring your three MFCC variants ----
 
+def build_small(num_classes: int) -> MambaKWS:
+    """
+    Small: d_model=64, n_layers=8, d_state=16, expand=2
+    """
+    return MambaKWS(num_classes, d_model=64, n_layers=8, d_state=16, expand=2)
 
-def mamba_mfcc_medium(n_classes: int = 35, n_mfcc: int = 40) -> MambaMFCCKWS:
+def build_medium(num_classes: int) -> MambaKWS:
     """
-    Medium Mamba-MFCC model
-    
-    Args:
-        n_classes: Number of output classes
-        n_mfcc: Number of MFCC coefficients
-        
-    Returns:
-        MambaMFCCKWS model instance
+    Medium: d_model=128, n_layers=10, d_state=16, expand=2
     """
-    return MambaMFCCKWS(
-        n_classes=n_classes,
-        d_model=128,
-        n_layers=10,
-        d_state=16,
-        expand=2,
-        n_mfcc=n_mfcc
-    )
+    return MambaKWS(num_classes, d_model=128, n_layers=10, d_state=16, expand=2)
 
-
-def mamba_mfcc_large(n_classes: int = 35, n_mfcc: int = 40) -> MambaMFCCKWS:
+def build_large(num_classes: int) -> MambaKWS:
     """
-    Large Mamba-MFCC model
-    
-    Args:
-        n_classes: Number of output classes  
-        n_mfcc: Number of MFCC coefficients
-        
-    Returns:
-        MambaMFCCKWS model instance
+    Large: d_model=192, n_layers=12, d_state=16, expand=2
     """
-    return MambaMFCCKWS(
-        n_classes=n_classes,
-        d_model=192,
-        n_layers=12,
-        d_state=16,
-        expand=2,
-        n_mfcc=n_mfcc
-    )
+    return MambaKWS(num_classes, d_model=192, n_layers=12, d_state=16, expand=2)

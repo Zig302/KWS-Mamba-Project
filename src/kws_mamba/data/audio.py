@@ -1,203 +1,231 @@
 """
-Audio preprocessing and augmentation utilities
+Audio utilities for KWS-Mamba:
+- WaveToSpec: waveform -> Mel (dB) or MFCC features with optional SpecAugment
+- Augment: waveform-level time shift / tempo stretch / Gaussian noise
+- Collate helpers: sequence-style (B, T, F) and image-style (B, 1, F, T)
 
-Contains WaveToSpec for feature extraction, Augment for data augmentation,
-and collate_fn for batching variable-length sequences.
+This module mirrors the front-ends and augmentations used in the original notebooks.
 """
 
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Tuple, Optional, Sequence
+
 import torch
-import torch.nn as nn
+import torch.nn.functional as F
 import torchaudio
 import torchaudio.transforms as T
-from typing import Optional, List, Tuple
-import random
 
 
-class WaveToSpec(nn.Module):
+# ---------------------------
+# Waveform-level augmentation
+# ---------------------------
+@dataclass
+class Augment:
     """
-    Audio preprocessing pipeline: waveform → spectrogram/MFCC
-    
-    Supports both Mel spectrograms and MFCC features with optional SpecAugment.
-    
+    Waveform augmentation with random time-shift, optional tempo stretch (sox),
+    and Gaussian noise.
+
     Args:
-        sample_rate (int): Audio sample rate (default: 16000)
-        n_fft (int): FFT window size
-        hop_length (int): Hop length for STFT  
-        n_mels (int): Number of Mel frequency bins
-        n_mfcc (Optional[int]): Number of MFCC coefficients (if None, returns log-Mel)
-        apply_mask (bool): Whether to apply SpecAugment masking during training
-        freq_mask_param (int): Frequency masking parameter for SpecAugment
-        time_mask_param (int): Time masking parameter for SpecAugment
+        stretch: (min, max) tempo factor. Use (1.0, 1.0) to disable.
+        shift_ms: +/- max shift in milliseconds.
+        noise: (min_sigma, max_sigma) white noise std range added to waveform.
+        sr: sample rate.
     """
-    
+    stretch: Tuple[float, float] = (1.0, 1.0)
+    shift_ms: int = 100
+    noise: Tuple[float, float] = (0.0, 0.05)
+    sr: int = 16_000
+
+    def _shift(self, x: torch.Tensor) -> torch.Tensor:
+        if self.shift_ms <= 0:
+            return x
+        max_shift = int(self.shift_ms * self.sr / 1000)
+        if max_shift == 0:
+            return x
+        s = int(torch.randint(-max_shift, max_shift + 1, ()).item())
+        if s == 0:
+            return x
+        return (F.pad(x, (s, 0))[:, :-s] if s > 0 else F.pad(x, (0, -s))[:, -s:])
+
+    def __call__(self, wav: torch.Tensor) -> torch.Tensor:
+        """Accepts [T] or [1, T]; returns same shape."""
+        squeezed = False
+        if wav.dim() == 1:
+            wav = wav.unsqueeze(0)
+            squeezed = True
+
+        # Optional tempo stretch (sox "tempo")
+        if self.stretch != (1.0, 1.0):
+            factor = float(torch.empty(()).uniform_(*self.stretch))
+            if abs(factor - 1.0) > 1e-3:
+                wav, _ = torchaudio.sox_effects.apply_effects_tensor(
+                    wav, self.sr, [["tempo", f"{factor:.6f}"]]
+                )
+
+        # Random circular-like shift via pad+crop
+        wav = self._shift(wav)
+
+        # Additive white noise
+        if self.noise[1] > 0:
+            sigma = float(torch.empty(()).uniform_(*self.noise))
+            if sigma > 0:
+                wav = wav + sigma * torch.randn_like(wav)
+
+        return wav.squeeze(0) if squeezed else wav
+
+
+# ---------------------------
+# Waveform -> Spectrogram/MFCC
+# ---------------------------
+class WaveToSpec:
+    """
+    Waveform -> log-Mel **or** MFCC features with optional SpecAugment.
+
+    Args:
+        feature_type: "mel" or "mfcc"
+        sample_rate, n_fft, hop_length, n_mels, n_mfcc: frontend params
+        top_db: dynamic range for AmplitudeToDB (Mel only)
+        apply_mask: enable SpecAugment masks
+        freq_mask_param, time_mask_param: mask extents
+        mask_on_mfcc: also apply masks on MFCC features (common in your MFCC runs)
+    """
+
     def __init__(
         self,
-        sample_rate: int = 16000,
-        n_fft: int = 512,
-        hop_length: int = 160,
-        n_mels: int = 40,
-        n_mfcc: Optional[int] = None,
-        apply_mask: bool = False,
-        freq_mask_param: int = 8,
+        feature_type: str = "mel",
+        sample_rate: int = 16_000,
+        n_fft: int = 2048,
+        hop_length: int = 256,
+        n_mels: int = 128,
+        n_mfcc: int = 40,
+        top_db: Optional[int] = 80,
+        apply_mask: bool = True,
+        freq_mask_param: int = 15,
         time_mask_param: int = 10,
+        mask_on_mfcc: bool = True,
     ):
-        super().__init__()
-        
-        self.sample_rate = sample_rate
-        self.n_mels = n_mels
-        self.n_mfcc = n_mfcc
+        ft = feature_type.lower()
+        assert ft in {"mel", "mfcc"}, "feature_type must be 'mel' or 'mfcc'"
+        self.feature_type = ft
         self.apply_mask = apply_mask
-        
-        # Mel spectrogram transform
-        self.mel_transform = T.MelSpectrogram(
-            sample_rate=sample_rate,
-            n_fft=n_fft,
-            hop_length=hop_length,
-            n_mels=n_mels,
-            normalized=True
-        )
-        
-        # MFCC transform if requested
-        if n_mfcc is not None:
-            self.mfcc_transform = T.MFCC(
+        self.mask_on_mfcc = mask_on_mfcc
+
+        if ft == "mel":
+            self.spec = T.MelSpectrogram(
+                sample_rate=sample_rate,
+                n_fft=n_fft,
+                hop_length=hop_length,
+                n_mels=n_mels,
+                power=2.0,
+            )
+            self.to_db = T.AmplitudeToDB(stype="power", top_db=top_db)
+            # Masks used only if apply_mask is True
+            self.freq_mask = T.FrequencyMasking(freq_mask_param) if apply_mask else None
+            self.time_mask = T.TimeMasking(time_mask_param) if apply_mask else None
+            self.n_out = n_mels
+        else:
+            self.spec = T.MFCC(
                 sample_rate=sample_rate,
                 n_mfcc=n_mfcc,
-                melkwargs={
-                    'n_fft': n_fft,
-                    'hop_length': hop_length,
-                    'n_mels': n_mels,
-                    'normalized': True
-                }
+                melkwargs=dict(n_fft=n_fft, hop_length=hop_length, n_mels=n_mels),
             )
-        else:
-            self.mfcc_transform = None
-        
-        # SpecAugment transforms
-        if apply_mask:
-            self.freq_mask = T.FrequencyMasking(freq_mask_param)
-            self.time_mask = T.TimeMasking(time_mask_param)
-    
-    def forward(self, waveform: torch.Tensor) -> torch.Tensor:
+            self.to_db = None
+            self.freq_mask = T.FrequencyMasking(freq_mask_param) if (apply_mask and mask_on_mfcc) else None
+            self.time_mask = T.TimeMasking(time_mask_param) if (apply_mask and mask_on_mfcc) else None
+            self.n_out = n_mfcc
+
+    def __call__(self, wav: torch.Tensor) -> torch.Tensor:
         """
-        Convert waveform to features
-        
         Args:
-            waveform: Input waveform tensor of shape (L,) or (1, L)
-            
+            wav: [T] or [1, T] float tensor
         Returns:
-            features: Log-Mel spectrogram or MFCC of shape (C, F, T)
+            [1, F, T_frames] tensor
         """
-        # Ensure waveform has batch dimension
-        if waveform.dim() == 1:
-            waveform = waveform.unsqueeze(0)
-        
-        # Apply MFCC or Mel spectrogram
-        if self.mfcc_transform is not None:
-            features = self.mfcc_transform(waveform)
+        if wav.dim() == 1:
+            wav = wav.unsqueeze(0)
+
+        feats = self.spec(wav)  # Mel: [1, M, T]; MFCC: [1, C, T]
+
+        if self.feature_type == "mel":
+            # Convert to log-dB, then optionally apply masks
+            feats = self.to_db(feats.clamp(min=1e-10))
+            if self.apply_mask and self.freq_mask is not None:
+                feats = self.freq_mask(feats)
+                feats = self.time_mask(feats)
         else:
-            features = self.mel_transform(waveform)
-            # Convert to log scale for better numerical stability
-            features = torch.log(features + 1e-8)
-        
-        # Apply SpecAugment if enabled (only during training)
-        if self.apply_mask and self.training:
-            # Apply frequency masking twice as mentioned in your paper
-            features = self.freq_mask(features)
-            features = self.freq_mask(features)
-            # Apply time masking twice for stronger regularization
-            features = self.time_mask(features)
-            features = self.time_mask(features)
-        
-        return features
+            # MFCC: optionally apply masks too (some of your runs do this)
+            if self.apply_mask and self.freq_mask is not None:
+                feats = self.freq_mask(feats)
+                feats = self.freq_mask(feats)
+                feats = self.time_mask(feats)
+                feats = self.time_mask(feats)
+
+        return feats  # [1, F, T]
 
 
-class Augment(nn.Module):
+# ---------------------------
+# Small utilities
+# ---------------------------
+def pad_or_trim_waveform(wav: torch.Tensor, target_len: int) -> torch.Tensor:
     """
-    Waveform-level augmentation pipeline
-    
-    Applies random time shifting and noise injection to raw audio waveforms
-    before spectral feature extraction.
-    
-    Args:
-        time_shift_range (int): Maximum time shift in samples (±range)
-        noise_std_range (Tuple[float, float]): Range for additive noise std dev
+    Pad with zeros or trim the waveform to exactly `target_len` samples.
+
+    Accepts [T] or [1, T]; returns same rank as input.
     """
-    
-    def __init__(
-        self,
-        time_shift_range: int = 1600,  # ±0.1s at 16kHz
-        noise_std_range: Tuple[float, float] = (0.001, 0.01),
-    ):
-        super().__init__()
-        self.time_shift_range = time_shift_range
-        self.noise_std_range = noise_std_range
-    
-    def forward(self, waveform: torch.Tensor) -> torch.Tensor:
-        """
-        Apply augmentations to waveform
-        
-        Args:
-            waveform: Input waveform tensor
-            
-        Returns:
-            augmented_waveform: Augmented waveform tensor
-        """
-        if not self.training:
-            return waveform
-        
-        # Time shifting
-        if self.time_shift_range > 0:
-            shift = random.randint(-self.time_shift_range, self.time_shift_range)
-            if shift > 0:
-                # Shift right: pad left, truncate right
-                waveform = torch.cat([torch.zeros(shift), waveform[:-shift]])
-            elif shift < 0:
-                # Shift left: truncate left, pad right
-                waveform = torch.cat([waveform[-shift:], torch.zeros(-shift)])
-        
-        # Additive noise injection
-        if self.noise_std_range[1] > 0:
-            noise_std = random.uniform(*self.noise_std_range)
-            noise = torch.randn_like(waveform) * noise_std
-            waveform = waveform + noise
-        
-        return waveform
+    squeezed = False
+    if wav.dim() == 1:
+        wav = wav.unsqueeze(0)
+        squeezed = True
+
+    n = wav.size(-1)
+    if n < target_len:
+        wav = F.pad(wav, (0, target_len - n))
+    elif n > target_len:
+        wav = wav[..., :target_len]
+
+    return wav.squeeze(0) if squeezed else wav
 
 
-def collate_fn(batch: List[Tuple[torch.Tensor, int]]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+# ---------------------------
+# Collate helpers
+# ---------------------------
+def collate_seq(batch: Sequence[tuple[torch.Tensor, int]]):
     """
-    Custom collate function for variable-length sequences
-    
-    Handles padding of feature sequences to uniform length within each batch
-    while preserving the true sequence lengths for masked operations.
-    
-    Args:
-        batch: List of (features, label) tuples where features are (T, F)
-        
+    For sequence models (Mamba/RetNet): pads along time.
+    Input items: (feats[T, F], label)
     Returns:
-        Tuple of:
-            - padded_features: Padded features tensor (B, T_max, F)
-            - labels: Label tensor (B,)
-            - lengths: True sequence lengths tensor (B,)
+        feats_padded: (B, T_max, F)
+        labels: (B,)
+        lengths: (B,)
     """
-    features_list, labels = zip(*batch)
-    
-    # Convert labels to tensor
-    labels = torch.tensor(labels, dtype=torch.long)
-    
-    # Get dimensions
-    batch_size = len(features_list)
-    max_time = max(feat.shape[0] for feat in features_list)
-    n_features = features_list[0].shape[1]
-    
-    # Initialize padded tensor
-    padded_features = torch.zeros(batch_size, max_time, n_features)
-    lengths = torch.zeros(batch_size, dtype=torch.long)
-    
-    # Fill padded tensor and record lengths
-    for i, feat in enumerate(features_list):
-        seq_len = feat.shape[0]
-        padded_features[i, :seq_len] = feat
-        lengths[i] = seq_len
-    
-    return padded_features, labels, lengths
+    feats, labels = zip(*batch)
+    lengths = torch.tensor([x.size(0) for x in feats], dtype=torch.long)
+    # pad to (B, T_max, F)
+    Fdim = feats[0].size(1)
+    T_max = max(x.size(0) for x in feats)
+    out = feats[0].new_zeros(len(feats), T_max, Fdim)
+    for i, x in enumerate(feats):
+        out[i, : x.size(0)] = x
+    return out, torch.tensor(labels, dtype=torch.long), lengths
+
+
+def collate_image(batch: Sequence[tuple[torch.Tensor, int]]):
+    """
+    For CNN-like models: outputs image-style tensors.
+    Input items: (feats[T, F], label)  OR (feats[1, F, T], label)
+    Returns:
+        feats_padded: (B, 1, F, T_max)
+        labels: (B,)
+    """
+    feats, labels = zip(*batch)
+    # Convert [T, F] -> [1, F, T]
+    feats = [x.unsqueeze(0).transpose(1, 2) if x.dim() == 2 else x for x in feats]
+    B, Fbins = len(feats), feats[0].size(1)
+    T_max = max(x.size(-1) for x in feats)
+    out = feats[0].new_zeros(B, 1, Fbins, T_max)
+    for i, x in enumerate(feats):
+        Tlen = x.size(-1)
+        out[i, :, :, :Tlen] = x
+    return out, torch.tensor(labels, dtype=torch.long)

@@ -1,133 +1,104 @@
 """
-SpeechCommands dataset wrapper with normalization
+Dataset wrapper(s) for KWS-Mamba using HuggingFace Speech Commands v0.02.
 
-Handles loading Google Speech Commands dataset with preprocessing pipeline
-and proper normalization using precomputed statistics.
+Exports:
+- SpeechCommands: wraps an HF split (train/valid/test) -> (features[T, F], label)
+- compute_dataset_stats: dataset-level mean/std over features
 """
 
+from __future__ import annotations
+
+from typing import Optional, Tuple
+
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset
-from typing import Optional, Callable, Any, Tuple
+
+from .audio import WaveToSpec, Augment, pad_or_trim_waveform
 
 
 class SpeechCommands(Dataset):
     """
-    Google Speech Commands Dataset Wrapper
-    
-    Wraps the raw dataset from HuggingFace datasets library and applies
-    the complete preprocessing pipeline including augmentation, feature
-    extraction, and normalization.
-    
+    HuggingFace split -> (feature, label), with fixed-length waveform preprocess.
+
+    Behavior:
+      • Pads/crops raw waveform to `wav_len` (default: 16_000).
+      • Applies optional waveform `Augment`.
+      • Extracts features via `WaveToSpec`.
+      • Normalizes features using dataset mean/std (pass 0/1 to disable).
+      • Returns features as [T, F] (transpose from [1, F, T]) for sequence models.
+
     Args:
-        dataset: Raw dataset from datasets library (train/validation/test split)
-        augment: Optional augmentation pipeline (Augment class)
-        frontend: Audio preprocessing pipeline (WaveToSpec class) 
-        mean: Precomputed normalization mean tensor
-        std: Precomputed normalization std tensor
+        hf_split: HuggingFace dataset split (e.g., ds["train"]).
+        aug: optional waveform-level augmentation callable.
+        frontend: WaveToSpec instance (train: masks on; eval: masks off).
+        wav_len: target length (samples) for pad/crop.
+        mean, std: dataset-wide normalization constants.
     """
-    
+
     def __init__(
         self,
-        dataset: Any,
-        augment: Optional[Callable] = None,
-        frontend: Optional[Callable] = None,
-        mean: Optional[torch.Tensor] = None,
-        std: Optional[torch.Tensor] = None,
+        hf_split,
+        aug: Optional[Augment],
+        frontend: WaveToSpec,
+        wav_len: int = 16_000,
+        mean: float = 0.0,
+        std: float = 1.0,
     ):
-        self.dataset = dataset
-        self.augment = augment
-        self.frontend = frontend
-        
-        # Use provided normalization stats or defaults
-        self.mean = mean if mean is not None else torch.tensor(0.0)
-        self.std = std if std is not None else torch.tensor(1.0)
-    
+        self.ds = hf_split
+        self.aug = aug
+        self.front = frontend
+        self.wav_len = wav_len
+        self.mean = float(mean)
+        self.std = float(std)
+
     def __len__(self) -> int:
-        return len(self.dataset)
-    
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int]:
-        """
-        Get preprocessed sample
-        
-        Args:
-            idx: Sample index
-            
-        Returns:
-            Tuple of:
-                - features: Processed features tensor (T, F)  
-                - label: Class label integer
-        """
-        # Get raw sample from dataset
-        sample = self.dataset[idx]
-        
-        # Extract audio and label
-        # Assuming dataset has 'audio' dict with 'array' key and 'label' key
-        wav = torch.tensor(sample['audio']['array'], dtype=torch.float32)
-        label = sample['label']
-        
-        # Apply waveform-level augmentation if provided (training only)
-        if self.augment is not None:
-            wav = self.augment(wav)
-        
-        # Apply frontend processing (WaveToSpec)
-        if self.frontend is not None:
-            features = self.frontend(wav)  # Shape: (C, F, T)
-        else:
-            # Fallback: use raw waveform (shouldn't happen in practice)
-            features = wav.unsqueeze(0).unsqueeze(0)  # (1, 1, L)
-        
-        # Normalize using precomputed statistics
-        # features shape: (C=1, F, T) -> normalize across F and T dimensions
-        features = (features - self.mean) / (self.std + 1e-6)
-        
-        # Squeeze channel dimension and transpose for sequence processing
-        # (C=1, F, T) -> (F, T) -> (T, F) for input to models
-        features = features.squeeze(0).transpose(0, 1)
-        
-        return features, label
+        return len(self.ds)
+
+    def __getitem__(self, idx: int):
+        sample = self.ds[idx]
+        wav = torch.from_numpy(sample["audio"]["array"]).float()  # [T]
+
+        # Ensure fixed 1s audio (matches training code)
+        wav = pad_or_trim_waveform(wav, self.wav_len)
+
+        if self.aug is not None:
+            wav = self.aug(wav)
+
+        # Front-end features: [1, F, T] -> normalize -> [T, F]
+        feats = self.front(wav)  # [1, F, T]
+        feats = (feats - self.mean) / (self.std + 1e-6)
+        feats = feats.squeeze(0).transpose(0, 1)  # [T, F]
+
+        return feats, sample["label"]
 
 
-def compute_normalization_stats(dataset, frontend, device='cpu', max_samples=None):
+@torch.no_grad()
+def compute_dataset_stats(
+    hf_split,
+    frontend: WaveToSpec,
+    wav_len: int = 16_000,
+) -> Tuple[float, float]:
     """
-    Compute normalization statistics from training dataset
-    
+    Compute dataset-level mean/std across all time frames and frequency bins.
+
     Args:
-        dataset: Training dataset  
-        frontend: WaveToSpec frontend
-        device: Device to compute on
-        max_samples: Maximum samples to use (None = all)
-        
+        hf_split: HF dataset split with {"audio": {"array"}, "label"} items.
+        frontend: WaveToSpec instance (use eval version: masks off).
+        wav_len: number of audio samples to pad/trim.
+
     Returns:
-        Tuple of (mean, std) tensors for normalization
+        (mean, std): floats over concatenated features.
     """
-    print("Computing normalization statistics...")
-    
-    frontend = frontend.to(device)
-    frontend.eval()
-    
-    # Collect features from training set
-    all_features = []
-    num_samples = len(dataset) if max_samples is None else min(max_samples, len(dataset))
-    
-    with torch.no_grad():
-        for i in range(num_samples):
-            if i % 1000 == 0:
-                print(f"Processing {i}/{num_samples}")
-            
-            sample = dataset[i]
-            wav = torch.tensor(sample['audio']['array'], dtype=torch.float32).to(device)
-            
-            # Apply frontend
-            features = frontend(wav)  # (C, F, T)
-            all_features.append(features.cpu())
-    
-    # Concatenate along time dimension and compute stats
-    all_features = torch.cat(all_features, dim=-1)  # (C, F, T_total)
-    
-    mean = all_features.mean(dim=(0, 2), keepdim=True)  # (1, F, 1)
-    std = all_features.std(dim=(0, 2), keepdim=True)   # (1, F, 1)
-    
-    print(f"Normalization stats computed from {num_samples} samples")
-    print(f"Mean shape: {mean.shape}, Std shape: {std.shape}")
-    
-    return mean, std
+    feats_all = []
+    for sample in hf_split:
+        wav = torch.from_numpy(sample["audio"]["array"]).float()
+        wav = pad_or_trim_waveform(wav, wav_len)
+        x = frontend(wav).squeeze(0).transpose(0, 1)  # [T, F]
+        feats_all.append(x)
+
+    if not feats_all:
+        return 0.0, 1.0
+
+    stacked = torch.cat(feats_all, dim=0)  # [sum_T, F]
+    return stacked.mean().item(), stacked.std().item()
