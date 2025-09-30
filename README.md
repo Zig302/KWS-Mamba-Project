@@ -45,15 +45,10 @@ pip install -e ".[dev,retnet]"
 
 ```python
 import torch
-from mamba_kws import MambaKWS, SpeechCommands, WaveToSpec
+from kws_mamba import mamba_mel_medium, SpeechCommands, WaveToSpec
 
 # Initialize model
-model = MambaKWS(
-    n_classes=35,
-    d_model=128,
-    n_layers=10,
-    d_state=16
-)
+model = mamba_mel_medium(n_classes=35)
 
 # Load and preprocess data
 frontend = WaveToSpec(n_mels=40, n_fft=512, hop_length=160)
@@ -102,28 +97,36 @@ All models demonstrate linear memory scaling O(L) with sequence length, making t
 ## Project Structure
 
 ```
-├── src/mamba_kws/          # Main package
+├── src/kws_mamba/          # Main package
 │   ├── models/             # Model implementations
+│   │   ├── mamba_mel.py    # Mamba with Mel spectrogram input
+│   │   ├── mamba_mfcc.py   # Mamba with MFCC input
+│   │   ├── cnn.py          # MobileNetV2 baseline
+│   │   └── retnet.py       # RetNet baseline
 │   ├── data/               # Dataset and preprocessing
+│   │   ├── audio.py        # WaveToSpec, Augment, collate_fn
+│   │   └── dataset.py      # SpeechCommands wrapper
 │   └── utils/              # Training and benchmarking utilities
-├── scripts/                # Training and evaluation scripts
+│       ├── metrics.py      # Accuracy, F1, confusion matrix
+│       └── seed.py         # Reproducibility and AMP helpers
 ├── notebooks/              # Jupyter notebooks and experiments
+├── assets/                 # Figures, diagrams, results
 ├── configs/                # Configuration files
-├── tests/                  # Unit tests
-└── docs/                   # Documentation
+├── scripts/                # Training and evaluation scripts
+└── tests/                  # Unit tests
 ```
 
 ## Training
 
 ```bash
 # Train with default configuration
-python scripts/train.py
+python -m kws_mamba.train
 
 # Train with custom config
-python scripts/train.py --config configs/mamba_medium.yaml
+python -m kws_mamba.train --config configs/mamba_medium.yaml
 
 # Benchmark trained model
-python scripts/benchmark.py --model-path checkpoints/best_model.pt
+python -m kws_mamba.benchmark --model-path checkpoints/best_model.pt
 ```
 
 ## Comparison with Baselines
